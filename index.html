@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebCodecs + web-demuxer 性能测试 Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .hero {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+    .hero h1 {
+      font-size: 2.4rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, #58a6ff, #79c0ff, #a5d6ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 1.1rem;
+      color: #8b949e;
+      max-width: 600px;
+      line-height: 1.7;
+    }
+    .badge-row {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #79c0ff;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+      max-width: 800px;
+      width: 100%;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 32px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .card:hover {
+      border-color: #58a6ff;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(88, 166, 255, 0.1);
+    }
+    .card-icon {
+      font-size: 2.4rem;
+    }
+    .card-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #e6edf3;
+    }
+    .card-desc {
+      font-size: 0.9rem;
+      color: #8b949e;
+      line-height: 1.6;
+      flex: 1;
+    }
+    .card-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .tag {
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #7ee787;
+    }
+    .card-arrow {
+      color: #58a6ff;
+      font-size: 1.1rem;
+      align-self: flex-end;
+    }
+    .footer {
+      margin-top: 60px;
+      text-align: center;
+      color: #484f58;
+      font-size: 13px;
+    }
+    .footer a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
+    .requirements {
+      max-width: 800px;
+      width: 100%;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 24px 32px;
+      margin-top: 24px;
+    }
+    .requirements h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    .req-list {
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 24px;
+    }
+    .req-list li {
+      font-size: 0.875rem;
+      color: #e6edf3;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .req-list li::before {
+      content: '✓';
+      color: #7ee787;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>WebCodecs 性能测试 Demo</h1>
+    <p>
+      使用 <strong>web-demuxer</strong>（WASM 解封装）+ <strong>WebCodecs.VideoDecoder</strong>（浏览器硬解）
+      验证视频帧读取、解码、渲染的性能表现。
+    </p>
+    <div class="badge-row">
+      <span class="badge">web-demuxer</span>
+      <span class="badge">WebCodecs</span>
+      <span class="badge">H.264 / H.265</span>
+      <span class="badge">Canvas 2D</span>
+      <span class="badge">Zero Dependencies</span>
+    </div>
+  </div>
+
+  <div class="cards">
+    <a class="card" href="webcodecs-demo.html">
+      <div class="card-icon">🎬</div>
+      <div class="card-title">单路视频性能测试</div>
+      <div class="card-desc">
+        对单个视频文件进行完整的性能基准测量：解析耗时、读取编码样本耗时、
+        WebCodecs 解码耗时、Canvas 渲染耗时，并支持预览指定帧。
+      </div>
+      <div class="card-tags">
+        <span class="tag">解析</span>
+        <span class="tag">解码</span>
+        <span class="tag">渲染</span>
+        <span class="tag">性能统计</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </a>
+
+    <a class="card" href="multi-video-demo.html">
+      <div class="card-icon">📹</div>
+      <div class="card-title">多路视频同步测试</div>
+      <div class="card-desc">
+        模拟多路（1–16路）视频同步解码播放场景，测量并发解码性能、
+        首帧就绪时间、性能预算达标情况（33ms / 帧 @ 30fps）。
+      </div>
+      <div class="card-tags">
+        <span class="tag">多路同步</span>
+        <span class="tag">并发解码</span>
+        <span class="tag">首帧耗时</span>
+        <span class="tag">性能预算</span>
+      </div>
+      <div class="card-arrow">→</div>
+    </a>
+  </div>
+
+  <div class="requirements">
+    <h3>运行环境要求</h3>
+    <ul class="req-list">
+      <li>Chrome 107+ 或 Edge 107+（WebCodecs 支持）</li>
+      <li>通过 HTTP/HTTPS 服务器访问（WASM 限制）</li>
+      <li>本地视频文件（H.264 / H.265 编码）</li>
+      <li>无需安装任何依赖，全部通过 CDN 加载</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    <p>
+      web-demuxer 由
+      <a href="https://github.com/bilibili/web-demuxer" target="_blank">bilibili/web-demuxer</a>
+      提供 &nbsp;·&nbsp;
+      <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API" target="_blank">WebCodecs API</a>
+    </p>
+  </div>
+</body>
+</html>

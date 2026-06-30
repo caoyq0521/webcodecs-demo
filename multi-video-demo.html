@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多路视频同步测试 - web-demuxer + WebCodecs</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 20px;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .nav { margin-bottom: 20px; }
+    .nav a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+    .subtitle { color: #8b949e; font-size: 0.9rem; margin-bottom: 24px; }
+    .section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      margin: 0 0 16px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .config-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .config-row label {
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    input[type="file"] {
+      color: #e6edf3;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 7px 12px;
+      cursor: pointer;
+      flex: 1;
+      min-width: 200px;
+    }
+    input[type="number"] {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 7px 10px;
+      color: #e6edf3;
+      width: 80px;
+      font-size: 14px;
+    }
+    button {
+      background: #1f6feb;
+      color: #fff;
+      border: 1px solid #388bfd;
+      padding: 8px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: #388bfd; }
+    button.btn-green {
+      background: #238636;
+      border-color: #2ea043;
+    }
+    button.btn-green:hover:not(:disabled) { background: #2ea043; }
+    button:disabled {
+      background: #21262d;
+      border-color: #30363d;
+      color: #484f58;
+      cursor: not-allowed;
+    }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+      gap: 10px;
+    }
+    .stat-item {
+      background: #21262d;
+      border: 1px solid #30363d;
+      padding: 14px;
+      border-radius: 6px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #8b949e;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stat-value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #58a6ff;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-value.good  { color: #7ee787; }
+    .stat-value.bad   { color: #f85149; }
+    .stat-value.plain { color: #e6edf3; }
+    .log {
+      background: #010409;
+      border: 1px solid #21262d;
+      color: #e6edf3;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      font-size: 12px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 3px 0; line-height: 1.5; }
+    .log-time    { color: #484f58; }
+    .log-success { color: #7ee787; }
+    .log-error   { color: #f85149; }
+    .log-info    { color: #79c0ff; }
+    .log-warn    { color: #e3b341; }
+    .progress-bar {
+      height: 4px;
+      background: #21262d;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1f6feb, #58a6ff);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.1s;
+    }
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .video-item {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .video-item-title {
+      text-align: center;
+      font-size: 12px;
+      color: #8b949e;
+      margin-bottom: 6px;
+    }
+    .video-item canvas {
+      width: 100%;
+      height: auto;
+      background: #000;
+      display: block;
+      border-radius: 3px;
+    }
+    .channel-status {
+      text-align: center;
+      font-size: 11px;
+      margin-top: 4px;
+      height: 16px;
+    }
+    .channel-status.ready { color: #7ee787; }
+    .channel-status.loading { color: #e3b341; }
+    .channel-status.error { color: #f85149; }
+  </style>
+</head>
+<body>
+  <div class="nav"><a href="index.html">← 返回首页</a></div>
+
+  <h1>📹 多路视频同步测试</h1>
+  <p class="subtitle">模拟多路视频并发解码 — 测量同步播放性能、首帧就绪时间、性能预算（33ms/帧 @ 30fps）</p>
+
+  <!-- 配置 -->
+  <div class="section">
+    <h2>1. 配置</h2>
+    <div class="config-row">
+      <label>视频文件</label>
+      <input type="file" id="videoInput" accept="video/*">
+    </div>
+    <div class="config-row">
+      <label>视频路数（1–16）</label>
+      <input type="number" id="videoCount" min="1" max="16" value="4">
+      <button id="setCountBtn" class="btn-green">应用路数</button>
+    </div>
+  </div>
+
+  <!-- 操作按钮 -->
+  <div class="section">
+    <h2>2. 操作</h2>
+    <div class="btn-row">
+      <button id="loadBtn" disabled>加载视频（初始化所有路 Demuxer）</button>
+      <button id="testBtn" disabled>性能测试（同步解码所有路所有帧）</button>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="log" id="log" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- 性能统计 -->
+  <div class="section">
+    <h2>3. 性能统计</h2>
+    <div class="stats">
+      <div class="stat-item">
+        <div class="stat-label">视频路数</div>
+        <div class="stat-value plain" id="videoCountDisplay">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">分辨率</div>
+        <div class="stat-value plain" id="resolution">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">帧率</div>
+        <div class="stat-value plain" id="fps">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">总帧数（单路）</div>
+        <div class="stat-value plain" id="totalFrames">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">解析耗时</div>
+        <div class="stat-value plain" id="parseTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">读取样本（平均/帧）</div>
+        <div class="stat-value" id="readSampleTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">解码耗时（平均/路/帧）</div>
+        <div class="stat-value" id="decodeFrameTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">渲染耗时（平均/路/帧）</div>
+        <div class="stat-value" id="renderFrameTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">总解码帧数</div>
+        <div class="stat-value plain" id="testFrames">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">首帧就绪（最慢路）</div>
+        <div class="stat-value" id="firstFrameTotalTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">首帧就绪（各路均值）</div>
+        <div class="stat-value" id="firstFrameAvgTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">性能预算（33ms/帧）</div>
+        <div class="stat-value plain" id="budgetStatus">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 预览 -->
+  <div class="section">
+    <h2>4. 各路预览（显示最后一帧）</h2>
+    <div class="video-grid" id="videoGrid"></div>
+  </div>
+
+  <script type="module">
+    const WEB_DEMUXER_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer/+esm';
+    const WASM_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer@latest/dist/wasm-files/web-demuxer.wasm';
+
+    let videoFile   = null;
+    let videoMeta   = null;
+    let videoCount  = 4;
+    let demuxers    = [];  // [{ instance, meta }]
+    let canvases    = [];
+    let contexts    = [];
+    let WebDemuxer  = null;
+
+    const videoInput       = document.getElementById('videoInput');
+    const videoCountInput  = document.getElementById('videoCount');
+    const setCountBtn      = document.getElementById('setCountBtn');
+    const loadBtn          = document.getElementById('loadBtn');
+    const testBtn          = document.getElementById('testBtn');
+    const logDiv           = document.getElementById('log');
+    const videoGrid        = document.getElementById('videoGrid');
+    const progressFill     = document.getElementById('progressFill');
+
+    // ─── 工具函数 ──────────────────────────────────────────────
+
+    function log(message, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-${type}">${message}</span>`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function formatTime(ms) {
+      if (ms < 1)    return `${(ms * 1000).toFixed(1)}μs`;
+      if (ms < 1000) return `${ms.toFixed(2)}ms`;
+      return `${(ms / 1000).toFixed(2)}s`;
+    }
+
+    function setProgress(pct) {
+      progressFill.style.width = `${Math.min(100, pct)}%`;
+    }
+
+    function setChannelStatus(idx, text, cls) {
+      const el = document.getElementById(`ch-status-${idx}`);
+      if (!el) return;
+      el.textContent = text;
+      el.className = `channel-status ${cls}`;
+    }
+
+    // 读取全部编码样本，兼容 v2/v3
+    async function readAllChunks(dmx, startSec, endSec) {
+      const chunks = [];
+      if (typeof dmx.readAVPacket === 'function') {
+        for await (const pkt of dmx.readAVPacket(startSec, endSec)) {
+          chunks.push(pkt);
+        }
+        return chunks;
+      }
+      if (typeof dmx.readMediaPacket === 'function') {
+        for await (const pkt of dmx.readMediaPacket('video', startSec, endSec)) {
+          chunks.push(pkt);
+        }
+        return chunks;
+      }
+      throw new Error('web-demuxer 不支持 readAVPacket / readMediaPacket');
+    }
+
+    function makeChunk(pkt) {
+      if (pkt instanceof EncodedVideoChunk) return pkt;
+      return new EncodedVideoChunk({
+        type: pkt.keyframe ? 'key' : 'delta',
+        timestamp: Math.floor((pkt.timestamp ?? 0) * 1_000_000),
+        data: pkt.data,
+      });
+    }
+
+    // ─── 创建 Canvas 预览格子 ──────────────────────────────────
+
+    function createCanvases() {
+      videoGrid.innerHTML = '';
+      canvases = [];
+      contexts = [];
+
+      for (let i = 0; i < videoCount; i++) {
+        const div = document.createElement('div');
+        div.className = 'video-item';
+
+        const title = document.createElement('div');
+        title.className = 'video-item-title';
+        title.textContent = `路 ${i + 1}`;
+
+        const cvs = document.createElement('canvas');
+        cvs.width  = 320;
+        cvs.height = 180;
+
+        const status = document.createElement('div');
+        status.className = 'channel-status';
+        status.id = `ch-status-${i}`;
+        status.textContent = '等待加载';
+
+        div.appendChild(title);
+        div.appendChild(cvs);
+        div.appendChild(status);
+        videoGrid.appendChild(div);
+
+        canvases.push(cvs);
+        contexts.push(cvs.getContext('2d'));
+      }
+    }
+
+    // ─── 设置路数 ─────────────────────────────────────────────
+
+    setCountBtn.addEventListener('click', () => {
+      videoCount = Math.max(1, Math.min(16, parseInt(videoCountInput.value) || 4));
+      videoCountInput.value = videoCount;
+      document.getElementById('videoCountDisplay').textContent = videoCount;
+      createCanvases();
+      log(`设置视频路数为 ${videoCount}`, 'info');
+    });
+
+    // ─── 文件选择 ─────────────────────────────────────────────
+
+    videoInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      videoFile = file;
+      loadBtn.disabled = false;
+      log(`已选择: ${file.name}  (${(file.size / 1024 / 1024).toFixed(2)} MB)`, 'info');
+    });
+
+    // ─── 加载视频（初始化所有路 Demuxer） ─────────────────────
+
+    loadBtn.addEventListener('click', async () => {
+      if (!videoFile) return;
+
+      loadBtn.disabled = true;
+      testBtn.disabled = true;
+      setProgress(0);
+
+      // 销毁旧实例
+      for (const d of demuxers) {
+        try { d.instance?.destroy?.(); } catch (_) {}
+      }
+      demuxers = [];
+
+      log(`开始加载 ${videoCount} 路 Demuxer…`, 'info');
+
+      try {
+        // 1. 加载 web-demuxer（仅首次）
+        if (!WebDemuxer) {
+          log('从 CDN 加载 web-demuxer…', 'info');
+          const mod = await import(WEB_DEMUXER_CDN);
+          WebDemuxer = mod.WebDemuxer ?? mod.default;
+          if (!WebDemuxer) throw new Error('CDN 返回模块未找到 WebDemuxer');
+          log('web-demuxer 加载成功', 'success');
+        }
+
+        const parseStart = performance.now();
+        let successCount = 0;
+
+        // 2. 并发初始化所有路 Demuxer
+        const results = await Promise.allSettled(
+          Array.from({ length: videoCount }, async (_, i) => {
+            setChannelStatus(i, '初始化…', 'loading');
+
+            const dmx = new WebDemuxer({ wasmFilePath: WASM_CDN });
+
+            // 加载文件
+            try {
+              await dmx.load(videoFile);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              log(`路 ${i + 1} 直接加载 File 失败，转用 ArrayBuffer: ${msg}`, 'warn');
+              const buf = await videoFile.arrayBuffer();
+              await dmx.load(buf);
+            }
+
+            const mediaInfo = await dmx.getMediaInfo();
+            const streams   = mediaInfo?.streams ?? [];
+            const videoStreams = streams.filter(
+              s => s.codec_type === 'video' || s.codec_type_string === 'video' || s.codec_type === 0
+            );
+            if (videoStreams.length === 0) throw new Error('未找到视频流');
+
+            const vconf = await dmx.getDecoderConfig('video');
+            if (!vconf) throw new Error('getDecoderConfig 返回空');
+
+            const vs  = videoStreams[0];
+            const fps = vconf.framerate
+              ?? (vs.r_frame_rate
+                ? Number(vs.r_frame_rate.split('/')[0]) / Number(vs.r_frame_rate.split('/')[1])
+                : 30);
+            const duration    = vs.duration ?? 0;
+            const totalFrames = Math.round(duration * fps) || parseInt(vs.nb_frames) || 0;
+
+            // 同步更新 canvas 尺寸
+            canvases[i].width  = vconf.codedWidth;
+            canvases[i].height = vconf.codedHeight;
+
+            setChannelStatus(i, '就绪', 'ready');
+
+            return {
+              instance: dmx,
+              meta: {
+                totalFrames,
+                fps: +fps.toFixed(3),
+                width:       vconf.codedWidth,
+                height:      vconf.codedHeight,
+                codec:       vconf.codec,
+                description: vconf.description,
+                duration,
+              },
+            };
+          })
+        );
+
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            demuxers.push(r.value);
+            successCount++;
+          } else {
+            log(`路 ${i + 1} 初始化失败: ${r.reason?.message}`, 'error');
+            setChannelStatus(i, '失败', 'error');
+          }
+        });
+
+        if (successCount === 0) throw new Error('所有路 Demuxer 初始化失败');
+
+        videoMeta  = demuxers[0].meta;
+        videoCount = successCount;
+
+        document.getElementById('totalFrames').textContent  = videoMeta.totalFrames;
+        document.getElementById('fps').textContent          = videoMeta.fps;
+        document.getElementById('resolution').textContent   = `${videoMeta.width}×${videoMeta.height}`;
+        document.getElementById('videoCountDisplay').textContent = videoCount;
+
+        const parseTime = performance.now() - parseStart;
+        document.getElementById('parseTime').textContent = formatTime(parseTime);
+
+        setProgress(100);
+        log(`成功初始化 ${successCount}/${videoCount} 路 Demuxer  耗时: ${formatTime(parseTime)}`, 'success');
+
+        loadBtn.disabled = false;
+        testBtn.disabled = false;
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`加载失败: ${msg}`, 'error');
+        console.error(err);
+        loadBtn.disabled = false;
+        setProgress(0);
+      }
+    });
+
+    // ─── 性能测试（同步解码所有路所有帧） ──────────────────────
+
+    testBtn.addEventListener('click', async () => {
+      if (!videoMeta || demuxers.length === 0) return;
+
+      testBtn.disabled = true;
+      loadBtn.disabled = true;
+      setProgress(0);
+
+      const totalFrames = videoMeta.totalFrames;
+      log(`开始同步性能测试 — ${videoCount} 路 × ${totalFrames} 帧…`, 'info');
+
+      try {
+        const testStart = performance.now();
+
+        // 1. 并发读取所有路的编码样本
+        log('并发读取各路编码样本…', 'info');
+        const readStart = performance.now();
+
+        const allChunksResults = await Promise.allSettled(
+          demuxers.map((d, i) =>
+            readAllChunks(d.instance, 0, videoMeta.duration).then(chunks => {
+              log(`路 ${i + 1}: 读取 ${chunks.length} 个样本`, 'info');
+              return chunks;
+            })
+          )
+        );
+
+        const allChunks = allChunksResults.map((r, i) => {
+          if (r.status === 'fulfilled') return r.value;
+          log(`路 ${i + 1} 读取失败: ${r.reason?.message}`, 'error');
+          return [];
+        });
+
+        const readTime    = performance.now() - readStart;
+        const totalChunks = allChunks.reduce((s, c) => s + c.length, 0);
+        const avgRead     = totalChunks > 0 ? readTime / totalChunks : 0;
+        document.getElementById('readSampleTime').textContent = formatTime(avgRead);
+        log(`读取完成: 共 ${totalChunks} 个样本  总耗时: ${formatTime(readTime)}  平均: ${formatTime(avgRead)}`, 'success');
+
+        setProgress(30);
+
+        // 2. 同步解码所有路
+        log('开始同步解码（并发 flush）…', 'info');
+        const decodeStart = performance.now();
+
+        const renderTimes       = [];
+        const firstFrameEndTime = new Array(videoCount).fill(null);
+        let   totalDecoded      = 0;
+
+        // 每路创建 VideoDecoder
+        const decoders = demuxers.map((_, i) => {
+          const dec = new VideoDecoder({
+            output: (frame) => {
+              if (firstFrameEndTime[i] === null) {
+                firstFrameEndTime[i] = performance.now();
+              }
+              const renderStart = performance.now();
+              contexts[i].drawImage(frame, 0, 0, canvases[i].width, canvases[i].height);
+              renderTimes.push(performance.now() - renderStart);
+              totalDecoded++;
+              frame.close();
+
+              // 进度更新
+              const maxFrames = videoCount * totalFrames;
+              setProgress(30 + (totalDecoded / maxFrames) * 65);
+            },
+            error: (e) => log(`路 ${i + 1} 解码错误: ${e.message}`, 'error'),
+          });
+
+          dec.configure({
+            codec:       videoMeta.codec,
+            description: videoMeta.description,
+            codedWidth:  videoMeta.width,
+            codedHeight: videoMeta.height,
+          });
+
+          return dec;
+        });
+
+        // 按帧顺序逐帧下发（所有路并发解码同一帧索引）
+        const maxLen = Math.max(...allChunks.map(c => c.length));
+        for (let fi = 0; fi < maxLen; fi++) {
+          for (let i = 0; i < videoCount; i++) {
+            if (fi < allChunks[i].length) {
+              decoders[i].decode(makeChunk(allChunks[i][fi]));
+            }
+          }
+          if (fi % Math.max(1, Math.floor(maxLen / 10)) === 0) {
+            log(`解码进度: ${fi + 1}/${maxLen} 帧 (${((fi + 1) / maxLen * 100).toFixed(0)}%)`, 'info');
+          }
+        }
+
+        // 并发等待所有路 flush 完成
+        await Promise.all(decoders.map(d => d.flush()));
+
+        const decodeTime          = performance.now() - decodeStart;
+        const avgDecodePerChannel = videoCount > 0 && totalFrames > 0
+          ? decodeTime / videoCount / totalFrames : 0;
+        const avgDecodePerFrame   = totalDecoded > 0 ? decodeTime / totalDecoded : 0;
+        const avgRender           = renderTimes.length > 0
+          ? renderTimes.reduce((a, b) => a + b, 0) / renderTimes.length : 0;
+
+        document.getElementById('decodeFrameTime').textContent = formatTime(avgDecodePerChannel);
+        document.getElementById('renderFrameTime').textContent = formatTime(avgRender);
+        document.getElementById('testFrames').textContent      = totalDecoded;
+
+        // 3. 首帧就绪统计
+        const firstFrameDurations = firstFrameEndTime
+          .map(t => t !== null ? t - decodeStart : null)
+          .filter(t => t !== null);
+        const firstFrameMax = firstFrameDurations.length > 0 ? Math.max(...firstFrameDurations) : 0;
+        const firstFrameAvg = firstFrameDurations.length > 0
+          ? firstFrameDurations.reduce((a, b) => a + b, 0) / firstFrameDurations.length : 0;
+
+        document.getElementById('firstFrameTotalTime').textContent = formatTime(firstFrameMax);
+        document.getElementById('firstFrameAvgTime').textContent   = formatTime(firstFrameAvg);
+
+        const detail = firstFrameDurations.map((t, i) => `路${i+1}:${formatTime(t)}`).join('  ');
+        log(`首帧就绪 — 最慢路: ${formatTime(firstFrameMax)}  各路均值: ${formatTime(firstFrameAvg)}`, 'success');
+        if (detail) log(`  详情: ${detail}`, 'info');
+
+        // 4. 性能预算判断（30fps = 33ms/帧）
+        const totalTime     = performance.now() - testStart;
+        const avgFrameTime  = totalFrames > 0 ? totalTime / totalFrames : 0;
+        const BUDGET_MS     = 33;
+        const passed        = avgFrameTime <= BUDGET_MS;
+
+        const budgetEl = document.getElementById('budgetStatus');
+        budgetEl.textContent = passed ? '✅ 达标' : '❌ 超标';
+        budgetEl.className   = `stat-value ${passed ? 'good' : 'bad'}`;
+
+        setProgress(100);
+        log(`测试完成 — 总耗时: ${formatTime(totalTime)}  平均帧时: ${formatTime(avgFrameTime)}  性能预算: ${passed ? '达标 ✅' : '超标 ❌'}`, passed ? 'success' : 'warn');
+        log(`  解码: 总${totalDecoded}帧  平均每帧${formatTime(avgDecodePerFrame)}  平均每路每帧${formatTime(avgDecodePerChannel)}  渲染${formatTime(avgRender)}`, 'info');
+
+        testBtn.disabled = false;
+        loadBtn.disabled = false;
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`性能测试失败: ${msg}`, 'error');
+        console.error(err);
+        testBtn.disabled = false;
+        loadBtn.disabled = false;
+        setProgress(0);
+      }
+    });
+
+    // ─── 初始化 ───────────────────────────────────────────────
+    createCanvases();
+    document.getElementById('videoCountDisplay').textContent = videoCount;
+    log('就绪 — 请选择视频文件并点击「应用路数」后加载（Chrome 107+，H.264/H.265）', 'info');
+  </script>
+</body>
+</html>

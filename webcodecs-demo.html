@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>单路视频性能测试 - web-demuxer + WebCodecs</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px 20px;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    .nav {
+      margin-bottom: 20px;
+    }
+    .nav a {
+      color: #58a6ff;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .nav a:hover { text-decoration: underline; }
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: #e6edf3;
+    }
+    .subtitle {
+      color: #8b949e;
+      font-size: 0.9rem;
+      margin-bottom: 24px;
+    }
+    .section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      margin: 0 0 16px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input[type="file"] {
+      color: #e6edf3;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 12px;
+      width: 100%;
+      cursor: pointer;
+    }
+    .video-info {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .info-chip {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 13px;
+      color: #e6edf3;
+    }
+    .info-chip span { color: #8b949e; margin-right: 4px; }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    button {
+      background: #238636;
+      color: #fff;
+      border: 1px solid #2ea043;
+      padding: 8px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: #2ea043; }
+    button.btn-primary {
+      background: #1f6feb;
+      border-color: #388bfd;
+    }
+    button.btn-primary:hover:not(:disabled) { background: #388bfd; }
+    button:disabled {
+      background: #21262d;
+      border-color: #30363d;
+      color: #484f58;
+      cursor: not-allowed;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .stat-item {
+      background: #21262d;
+      border: 1px solid #30363d;
+      padding: 14px;
+      border-radius: 6px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #8b949e;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .stat-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #58a6ff;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-value.good { color: #7ee787; }
+    .stat-value.plain { color: #e6edf3; }
+    canvas {
+      max-width: 100%;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      background: #000;
+      display: block;
+    }
+    .log {
+      background: #010409;
+      border: 1px solid #21262d;
+      color: #e6edf3;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      font-size: 12px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 3px 0; line-height: 1.5; }
+    .log-time { color: #484f58; }
+    .log-success { color: #7ee787; }
+    .log-error { color: #f85149; }
+    .log-info { color: #79c0ff; }
+    .log-warn { color: #e3b341; }
+    .progress-bar {
+      height: 4px;
+      background: #21262d;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1f6feb, #58a6ff);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.1s;
+    }
+  </style>
+</head>
+<body>
+  <div class="nav"><a href="index.html">← 返回首页</a></div>
+
+  <h1>🎬 单路视频性能测试</h1>
+  <p class="subtitle">基于 web-demuxer + WebCodecs — 测量解析、读取编码样本、解码、渲染各阶段耗时</p>
+
+  <!-- 文件选择 -->
+  <div class="section">
+    <h2>1. 选择视频文件</h2>
+    <input type="file" id="videoInput" accept="video/*">
+    <div class="video-info" id="videoInfo"></div>
+  </div>
+
+  <!-- 操作按钮 -->
+  <div class="section">
+    <h2>2. 操作</h2>
+    <div class="btn-row">
+      <button id="loadBtn" class="btn-primary" disabled>加载并解析视频</button>
+      <button id="testBtn" disabled>性能测试（解析所有帧）</button>
+      <button id="renderBtn" disabled>渲染第 50 帧</button>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="log" id="log" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- 性能统计 -->
+  <div class="section">
+    <h2>3. 性能统计</h2>
+    <div class="stats">
+      <div class="stat-item">
+        <div class="stat-label">解析耗时</div>
+        <div class="stat-value plain" id="parseTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">读取样本（平均/帧）</div>
+        <div class="stat-value" id="readSampleTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">解码耗时（平均/帧）</div>
+        <div class="stat-value" id="decodeFrameTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">渲染耗时（第50帧）</div>
+        <div class="stat-value" id="renderFrameTime">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">总帧数</div>
+        <div class="stat-value plain" id="totalFrames">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">实际解码帧数</div>
+        <div class="stat-value plain" id="testFrames">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 预览 -->
+  <div class="section">
+    <h2>4. 帧预览</h2>
+    <canvas id="canvas" width="640" height="360"></canvas>
+  </div>
+
+  <script type="module">
+    // CDN 加载 web-demuxer（无需本地安装）
+    const WEB_DEMUXER_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer/+esm';
+    // WASM 文件走 jsDelivr CDN（Option 1，官方推荐）
+    const WASM_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer@latest/dist/wasm-files/web-demuxer.wasm';
+
+    let demuxer = null;
+    let videoMeta = null;
+    let WebDemuxer = null;
+
+    const videoInput  = document.getElementById('videoInput');
+    const loadBtn     = document.getElementById('loadBtn');
+    const testBtn     = document.getElementById('testBtn');
+    const renderBtn   = document.getElementById('renderBtn');
+    const logDiv      = document.getElementById('log');
+    const videoInfoDiv = document.getElementById('videoInfo');
+    const progressFill = document.getElementById('progressFill');
+    const canvas      = document.getElementById('canvas');
+    const ctx         = canvas.getContext('2d');
+
+    // ─── 工具函数 ───────────────────────────────────────────────
+
+    function log(message, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-${type}">${message}</span>`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function formatTime(ms) {
+      if (ms < 1)    return `${(ms * 1000).toFixed(1)}μs`;
+      if (ms < 1000) return `${ms.toFixed(2)}ms`;
+      return `${(ms / 1000).toFixed(2)}s`;
+    }
+
+    function setProgress(pct) {
+      progressFill.style.width = `${Math.min(100, pct)}%`;
+    }
+
+    // 读取视频编码样本（兼容 web-demuxer v2/v3 API）
+    async function readAllChunks(dmx, startSec, endSec) {
+      const chunks = [];
+
+      // v3: readAVPacket 返回 AsyncIterator
+      if (typeof dmx.readAVPacket === 'function') {
+        const iter = dmx.readAVPacket(startSec, endSec);
+        for await (const pkt of iter) {
+          chunks.push(pkt);
+        }
+        return chunks;
+      }
+
+      // v2: readMediaPacket
+      if (typeof dmx.readMediaPacket === 'function') {
+        const iter = dmx.readMediaPacket('video', startSec, endSec);
+        for await (const pkt of iter) {
+          chunks.push(pkt);
+        }
+        return chunks;
+      }
+
+      throw new Error('web-demuxer 实例不支持 readAVPacket / readMediaPacket，请检查版本');
+    }
+
+    // EncodedVideoChunk 构造兼容层
+    function makeChunk(pkt) {
+      // web-demuxer v3 直接返回 EncodedVideoChunk
+      if (pkt instanceof EncodedVideoChunk) return pkt;
+      // v2 返回原始对象，手动构造
+      return new EncodedVideoChunk({
+        type: pkt.keyframe ? 'key' : 'delta',
+        timestamp: Math.floor((pkt.timestamp ?? 0) * 1_000_000),
+        data: pkt.data,
+      });
+    }
+
+    // ─── 文件选择 ────────────────────────────────────────────────
+
+    videoInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      loadBtn.disabled = false;
+      log(`已选择: ${file.name}  (${(file.size / 1024 / 1024).toFixed(2)} MB)`, 'info');
+    });
+
+    // ─── 加载视频 ────────────────────────────────────────────────
+
+    loadBtn.addEventListener('click', async () => {
+      const file = videoInput.files[0];
+      if (!file) return;
+
+      loadBtn.disabled = true;
+      testBtn.disabled = true;
+      renderBtn.disabled = true;
+      videoInfoDiv.innerHTML = '';
+      setProgress(5);
+
+      try {
+        // 1. 加载 web-demuxer（仅首次）
+        if (!WebDemuxer) {
+          log('正在从 CDN 加载 web-demuxer…', 'info');
+          const mod = await import(WEB_DEMUXER_CDN);
+          WebDemuxer = mod.WebDemuxer ?? mod.default;
+          if (!WebDemuxer) throw new Error('CDN 返回模块中未找到 WebDemuxer 导出');
+          log('web-demuxer 加载成功', 'success');
+        }
+
+        setProgress(20);
+        const parseStart = performance.now();
+
+        // 2. 初始化 demuxer，WASM 走 CDN
+        log(`初始化 WebDemuxer（WASM: ${WASM_CDN}）…`, 'info');
+        if (demuxer) {
+          try { demuxer.destroy?.(); } catch (_) {}
+        }
+        demuxer = new WebDemuxer({ wasmFilePath: WASM_CDN });
+
+        setProgress(30);
+
+        // 3. 加载文件
+        log('加载视频文件…', 'info');
+        try {
+          await demuxer.load(file);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log(`直接加载 File 失败，转用 ArrayBuffer: ${msg}`, 'warn');
+          const buf = await file.arrayBuffer();
+          await demuxer.load(buf);
+        }
+
+        setProgress(55);
+
+        // 4. 读取元数据
+        log('读取媒体信息…', 'info');
+        const mediaInfo = await demuxer.getMediaInfo();
+        const streams = mediaInfo?.streams ?? [];
+        const videoStreams = streams.filter(
+          s => s.codec_type === 'video' || s.codec_type_string === 'video' || s.codec_type === 0
+        );
+
+        if (videoStreams.length === 0) {
+          streams.forEach((s, i) =>
+            log(`  流[${i}]: codec_type=${s.codec_type} codec=${s.codec}`, 'warn')
+          );
+          throw new Error('文件中未找到视频流');
+        }
+
+        setProgress(70);
+
+        // 5. 获取解码器配置
+        const vconf = await demuxer.getDecoderConfig('video');
+        if (!vconf) throw new Error('getDecoderConfig 返回空');
+
+        const parseEnd = performance.now();
+
+        // 6. 构建视频元数据
+        const videoStream = videoStreams[0];
+        const fps = vconf.framerate
+          ?? (videoStream.r_frame_rate
+              ? Number(videoStream.r_frame_rate.split('/')[0]) / Number(videoStream.r_frame_rate.split('/')[1])
+              : 30);
+        const duration = videoStream.duration ?? 0;
+        const totalFrames = Math.round(duration * fps) || parseInt(videoStream.nb_frames) || 0;
+
+        videoMeta = {
+          totalFrames,
+          fps: +fps.toFixed(3),
+          width:  vconf.codedWidth,
+          height: vconf.codedHeight,
+          codec:  vconf.codec,
+          description: vconf.description,
+          duration,
+        };
+
+        const parseTime = parseEnd - parseStart;
+        document.getElementById('parseTime').textContent = formatTime(parseTime);
+        document.getElementById('totalFrames').textContent = videoMeta.totalFrames;
+
+        // 7. 检查解码器支持
+        const support = await VideoDecoder.isConfigSupported({
+          codec: videoMeta.codec,
+          codedWidth: videoMeta.width,
+          codedHeight: videoMeta.height,
+          description: videoMeta.description,
+        });
+        if (!support.supported) throw new Error(`浏览器不支持该视频编码: ${videoMeta.codec}`);
+
+        // 8. 更新分辨率到 canvas
+        canvas.width  = videoMeta.width;
+        canvas.height = videoMeta.height;
+
+        // 9. 显示视频信息
+        videoInfoDiv.innerHTML = [
+          `<div class="info-chip"><span>分辨率</span>${videoMeta.width}×${videoMeta.height}</div>`,
+          `<div class="info-chip"><span>时长</span>${videoMeta.duration.toFixed(2)}s</div>`,
+          `<div class="info-chip"><span>帧率</span>${videoMeta.fps} fps</div>`,
+          `<div class="info-chip"><span>总帧数</span>${videoMeta.totalFrames}</div>`,
+          `<div class="info-chip"><span>编码</span>${videoMeta.codec}</div>`,
+          `<div class="info-chip"><span>解析耗时</span>${formatTime(parseTime)}</div>`,
+        ].join('');
+
+        setProgress(100);
+        log(`解析完成 — ${videoMeta.width}×${videoMeta.height} @ ${videoMeta.fps}fps  耗时: ${formatTime(parseTime)}`, 'success');
+
+        testBtn.disabled = false;
+        renderBtn.disabled = false;
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`加载失败: ${msg}`, 'error');
+        console.error(err);
+        loadBtn.disabled = false;
+        setProgress(0);
+      }
+    });
+
+    // ─── 性能测试（读取并解码所有帧） ──────────────────────────────
+
+    testBtn.addEventListener('click', async () => {
+      if (!demuxer || !videoMeta) return;
+
+      testBtn.disabled = true;
+      renderBtn.disabled = true;
+      setProgress(0);
+
+      log(`开始性能测试 — 共 ${videoMeta.totalFrames} 帧…`, 'info');
+
+      try {
+        // 1. 读取所有编码样本
+        log('读取编码样本…', 'info');
+        const readStart = performance.now();
+        const rawChunks = await readAllChunks(demuxer, 0, videoMeta.duration);
+        const readTime  = performance.now() - readStart;
+        const avgRead   = rawChunks.length > 0 ? readTime / rawChunks.length : 0;
+
+        document.getElementById('readSampleTime').textContent = formatTime(avgRead);
+        log(`读取完成: ${rawChunks.length} 个编码样本  总耗时: ${formatTime(readTime)}  平均: ${formatTime(avgRead)}`, 'success');
+
+        setProgress(40);
+
+        // 2. 解码所有帧
+        log('开始解码…', 'info');
+        const decodeStart  = performance.now();
+        let   decodedCount = 0;
+
+        await new Promise((resolve, reject) => {
+          const dec = new VideoDecoder({
+            output: (frame) => {
+              decodedCount++;
+              frame.close();
+              const pct = 40 + (decodedCount / rawChunks.length) * 55;
+              setProgress(pct);
+              if (decodedCount % Math.max(1, Math.floor(rawChunks.length / 10)) === 0) {
+                log(`解码进度: ${decodedCount}/${rawChunks.length} (${(decodedCount/rawChunks.length*100).toFixed(0)}%)`, 'info');
+              }
+            },
+            error: (e) => reject(e),
+          });
+
+          dec.configure({
+            codec: videoMeta.codec,
+            description: videoMeta.description,
+            codedWidth: videoMeta.width,
+            codedHeight: videoMeta.height,
+          });
+
+          for (const pkt of rawChunks) {
+            dec.decode(makeChunk(pkt));
+          }
+
+          dec.flush().then(resolve).catch(reject);
+        });
+
+        const decodeTime = performance.now() - decodeStart;
+        const avgDecode  = decodedCount > 0 ? decodeTime / decodedCount : 0;
+
+        document.getElementById('decodeFrameTime').textContent = formatTime(avgDecode);
+        document.getElementById('testFrames').textContent = decodedCount;
+
+        setProgress(100);
+        log(`解码完成: ${decodedCount} 帧  总耗时: ${formatTime(decodeTime)}  平均: ${formatTime(avgDecode)}`, 'success');
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`性能测试失败: ${msg}`, 'error');
+        console.error(err);
+      } finally {
+        testBtn.disabled = false;
+        renderBtn.disabled = false;
+      }
+    });
+
+    // ─── 渲染第 50 帧 ────────────────────────────────────────────
+
+    renderBtn.addEventListener('click', async () => {
+      if (!demuxer || !videoMeta) return;
+
+      renderBtn.disabled = true;
+      log('读取并渲染第 50 帧…', 'info');
+
+      try {
+        const frameIndex  = Math.min(50, videoMeta.totalFrames - 1);
+        const startSec    = Math.max(0, (frameIndex - 1) / videoMeta.fps);
+        const endSec      = (frameIndex + 2) / videoMeta.fps;
+
+        const rawChunks = await readAllChunks(demuxer, startSec, endSec);
+        if (rawChunks.length === 0) throw new Error('未读取到编码样本（确认帧范围是否有效）');
+
+        const renderOverall = performance.now();
+
+        await new Promise((resolve, reject) => {
+          let rendered = false;
+          const dec = new VideoDecoder({
+            output: (frame) => {
+              if (rendered) { frame.close(); return; }
+              rendered = true;
+              const drawStart = performance.now();
+              ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+              const renderTime = performance.now() - renderOverall;
+              document.getElementById('renderFrameTime').textContent = formatTime(renderTime);
+              log(`第 ${frameIndex} 帧渲染完成  绘制耗时: ${formatTime(performance.now() - drawStart)}  端到端: ${formatTime(renderTime)}`, 'success');
+              frame.close();
+              resolve();
+            },
+            error: reject,
+          });
+
+          dec.configure({
+            codec: videoMeta.codec,
+            description: videoMeta.description,
+            codedWidth: videoMeta.width,
+            codedHeight: videoMeta.height,
+          });
+
+          // 必须从关键帧开始解码，否则 delta 帧无法独立解码
+          for (const pkt of rawChunks) {
+            dec.decode(makeChunk(pkt));
+          }
+          dec.flush();
+        });
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`渲染失败: ${msg}`, 'error');
+        console.error(err);
+      } finally {
+        renderBtn.disabled = false;
+      }
+    });
+
+    log('就绪 — 请选择视频文件（H.264 / H.265 编码，需在 Chrome 107+ 中运行）', 'info');
+  </script>
+</body>
+</html>
