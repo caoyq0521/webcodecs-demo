@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Windows WebCodecs 差异诊断 — flush / hardwareAcceleration / optimizeForLatency</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 20px; }
+    .hint { color: #555; font-size: 14px; line-height: 1.5; }
+    .row { margin: 12px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button { padding: 8px 12px; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f5f5f5; }
+    .pass { color: #0a7; font-weight: 600; }
+    .fail { color: #c00; font-weight: 600; }
+    .skip { color: #888; }
+    .run { color: #06c; font-weight: 600; }
+    #heartbeat { margin-top: 8px; padding: 8px 12px; background: #fff8e6; border: 1px solid #f0d78c; font-size: 13px; display: none; }
+    #log { background: #111; color: #ddd; padding: 12px; height: 280px; overflow: auto; font: 12px/1.4 ui-monospace, monospace; margin-top: 12px; }
+    .ok { color: #4ec9b0; }
+    .err { color: #f14c4c; }
+    .info { color: #dcdcaa; }
+  </style>
+</head>
+<body>
+  <h1>Windows WebCodecs 差异诊断</h1>
+  <p class="hint">
+    对比「demo 流式 decode」vs「生产式 GOP + 频繁 flush」。
+    访问：<code>http://localhost:3500/scratch/multi-video-poc/windows-hw-flush-diff.html</code>
+    （需先 <code>npm run dev</code>）。硬解 flush 挂死时会<strong>立刻 close 解码器并判 FAIL</strong>，不会无限转圈。
+  </p>
+
+  <div class="row">
+    <input type="file" id="file" accept="video/*" />
+    <label>单次 flush 超时(ms)
+      <input id="timeout" type="number" value="3000" min="500" step="500" style="width:90px" />
+    </label>
+    <button id="run" disabled>跑完整矩阵</button>
+    <button id="abort" disabled>中止</button>
+  </div>
+  <div id="heartbeat"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>模式</th>
+        <th>hardwareAcceleration</th>
+        <th>optimizeForLatency</th>
+        <th>结果</th>
+        <th>耗时</th>
+        <th>备注</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div id="log"></div>
+
+  <script type="module">
+    const WEB_DEMUXER_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer/+esm';
+    const WASM_CDN = 'https://cdn.jsdelivr.net/npm/web-demuxer@latest/dist/wasm-files/web-demuxer.wasm';
+
+    // 顺序：先跑软解（应快速 PASS），再 demo，最后才是容易挂的硬解用例
+    const FLUSH_CASES = [
+      {
+        id: 'C-prod-soft',
+        mode: 'GOP + flush×N + prefer-software（对照，应快过）',
+        hardwareAcceleration: 'prefer-software',
+        optimizeForLatency: true,
+        pattern: 'seek-flush',
+      },
+      {
+        id: 'A-demo-stream',
+        mode: 'stream + flush×1（demo 模式）',
+        hardwareAcceleration: undefined,
+        optimizeForLatency: undefined,
+        pattern: 'stream',
+      },
+      {
+        id: 'E-stream-latency',
+        mode: 'stream + flush×1 + optimizeForLatency',
+        hardwareAcceleration: undefined,
+        optimizeForLatency: true,
+        pattern: 'stream',
+      },
+      {
+        id: 'D-prod-no-latency',
+        mode: 'GOP + flush×N（无 optimizeForLatency）',
+        hardwareAcceleration: undefined,
+        optimizeForLatency: undefined,
+        pattern: 'seek-flush',
+      },
+      {
+        id: 'B-prod-default',
+        mode: 'GOP + flush×N（生产默认，易挂）',
+        hardwareAcceleration: undefined,
+        optimizeForLatency: true,
+        pattern: 'seek-flush',
+      },
+      {
+        id: 'F-prod-hw',
+        mode: 'GOP + flush×N + prefer-hardware（易挂）',
+        hardwareAcceleration: 'prefer-hardware',
+        optimizeForLatency: true,
+        pattern: 'seek-flush',
+      },
+    ];
+
+    const fileEl = document.getElementById('file');
+    const runBtn = document.getElementById('run');
+    const abortBtn = document.getElementById('abort');
+    const tbody = document.getElementById('tbody');
+    const logEl = document.getElementById('log');
+    const timeoutEl = document.getElementById('timeout');
+    const heartbeatEl = document.getElementById('heartbeat');
+
+    let demuxer = null;
+    let videoMeta = null;
+    /** @type {EncodedVideoChunk[][]} */
+    let gopChunks = [];
+    let aborted = false;
+    let heartbeatTimer = null;
+
+    function log(msg, cls = 'info') {
+      const line = document.createElement('div');
+      line.className = cls;
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(msg);
+    }
+
+    function setHeartbeat(text) {
+      if (!text) {
+        heartbeatEl.style.display = 'none';
+        heartbeatEl.textContent = '';
+        return;
+      }
+      heartbeatEl.style.display = 'block';
+      heartbeatEl.textContent = text;
+    }
+
+    function startHeartbeat(label) {
+      stopHeartbeat();
+      const t0 = performance.now();
+      setHeartbeat(`进行中：${label}（0.0s）— 若超过超时阈值会自动 close 并 FAIL，请稍等`);
+      heartbeatTimer = setInterval(() => {
+        const s = ((performance.now() - t0) / 1000).toFixed(1);
+        setHeartbeat(`进行中：${label}（${s}s）— 超时后会自动 close，不会永久转圈`);
+      }, 200);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
+
+    /** 让出主线程，确保表格/日志能先画出来 */
+    function paint() {
+      return new Promise((r) => setTimeout(r, 0));
+    }
+
+    /**
+     * flush 超时立即 decoder.close()，促使挂起的 flush Promise reject，
+     * 避免硬解会话占死导致后续用例全部转圈。
+     */
+    function flushWithTimeout(decoder, ms, label) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const t = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try {
+            decoder.close();
+          } catch (_) {
+            /* ignore */
+          }
+          reject(new Error(`${label} 超时 ${ms}ms（flush 疑似永久 pending，已 close）`));
+        }, ms);
+
+        let p;
+        try {
+          p = decoder.flush();
+        } catch (e) {
+          clearTimeout(t);
+          settled = true;
+          reject(e);
+          return;
+        }
+
+        p.then(
+          (v) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(t);
+            resolve(v);
+          },
+          (e) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(t);
+            reject(e);
+          },
+        );
+      });
+    }
+
+    function safeClose(decoder) {
+      try {
+        if (decoder && decoder.state !== 'closed') decoder.close();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    function buildConfig(base, c) {
+      const config = {
+        codec: base.codec,
+        codedWidth: base.width,
+        codedHeight: base.height,
+        description: base.description,
+      };
+      if (c.hardwareAcceleration !== undefined) {
+        config.hardwareAcceleration = c.hardwareAcceleration;
+      }
+      if (c.optimizeForLatency !== undefined) {
+        config.optimizeForLatency = c.optimizeForLatency;
+      }
+      return config;
+    }
+
+    function renderRows() {
+      tbody.innerHTML = '';
+      FLUSH_CASES.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        tr.id = `row-${c.id}`;
+        tr.innerHTML = `
+          <td>${i + 1}</td>
+          <td>${c.mode}</td>
+          <td>${c.hardwareAcceleration ?? '(默认)'}</td>
+          <td>${c.optimizeForLatency ?? '(默认)'}</td>
+          <td class="skip" data-status>—</td>
+          <td data-ms>—</td>
+          <td data-note></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function setRow(id, status, ms, note) {
+      const tr = document.getElementById(`row-${id}`);
+      const st = tr.querySelector('[data-status]');
+      st.textContent = status;
+      st.className =
+        status === 'PASS' ? 'pass' : status === 'FAIL' ? 'fail' : status === 'RUN' ? 'run' : 'skip';
+      tr.querySelector('[data-ms]').textContent = ms != null ? `${ms.toFixed(0)}ms` : '—';
+      tr.querySelector('[data-note]').textContent = note || '';
+    }
+
+    fileEl.addEventListener('change', async () => {
+      runBtn.disabled = true;
+      const file = fileEl.files?.[0];
+      if (!file) return;
+      logEl.innerHTML = '';
+      renderRows();
+      setHeartbeat('正在 demux / 读样本…');
+      try {
+        log(`加载文件 ${file.name}…`);
+        await paint();
+        const mod = await import(WEB_DEMUXER_CDN);
+        const WebDemuxer = mod.WebDemuxer || mod.default;
+        demuxer = new WebDemuxer({ wasmFilePath: WASM_CDN });
+        await demuxer.load(file);
+        const mediaInfo = await demuxer.getMediaInfo();
+        const vconf = await demuxer.getDecoderConfig('video');
+        const videoStream =
+          (mediaInfo.streams || []).find((s) => s.codec_type === 0 || s.codec_type === 'video') ||
+          mediaInfo.streams?.[0];
+        const raw = videoStream?.r_frame_rate || '30/1';
+        const [n, d] = raw.split('/').map(Number);
+        const fps = d ? n / d : n || 30;
+        const duration = mediaInfo.duration || videoStream?.duration || 0;
+        videoMeta = {
+          codec: vconf.codec,
+          width: vconf.codedWidth,
+          height: vconf.codedHeight,
+          description: vconf.description,
+          fps,
+          duration,
+          totalFrames: Math.round(duration * fps) || parseInt(videoStream?.nb_frames, 10) || 0,
+        };
+        log(
+          `meta codec=${videoMeta.codec} ${videoMeta.width}x${videoMeta.height} fps=${videoMeta.fps} frames≈${videoMeta.totalFrames}`,
+          'ok',
+        );
+
+        // 只取前 ~1s，最多 2 个 GOP，避免诊断页本身跑太久
+        const endSec = Math.min(1, duration || 1);
+        const rawPackets = [];
+        if (demuxer.readMediaPacket) {
+          for await (const p of demuxer.readMediaPacket('video', 0, endSec)) rawPackets.push(p);
+        } else if (demuxer.readAVPacket) {
+          for await (const p of demuxer.readAVPacket(0, endSec)) rawPackets.push(p);
+        }
+        if (rawPackets.length === 0) throw new Error('未读到编码样本');
+
+        const toChunk = (p) =>
+          new EncodedVideoChunk({
+            type: p.keyframe || p.type === 'key' ? 'key' : 'delta',
+            timestamp:
+              typeof p.timestamp === 'number' && p.timestamp < 1e6
+                ? Math.floor(p.timestamp * 1e6)
+                : Math.floor(p.timestamp),
+            data: p.data,
+          });
+
+        gopChunks = [];
+        let batch = [];
+        for (const p of rawPackets) {
+          const isKey = !!(p.keyframe || p.type === 'key');
+          if (isKey && batch.length) {
+            gopChunks.push(batch);
+            batch = [];
+          }
+          batch.push(toChunk(p));
+        }
+        if (batch.length) gopChunks.push(batch);
+        gopChunks = gopChunks.slice(0, 2);
+        const flatCount = gopChunks.reduce((s, b) => s + b.length, 0);
+        log(`样本：${flatCount} chunks，${gopChunks.length} 批（最多 2 GOP）`, 'ok');
+        runBtn.disabled = false;
+        setHeartbeat('');
+      } catch (e) {
+        log(`加载失败: ${e.message}`, 'err');
+        console.error(e);
+        setHeartbeat('');
+      }
+    });
+
+    async function runCase(c, timeoutMs) {
+      const config = buildConfig(videoMeta, c);
+      const support = await VideoDecoder.isConfigSupported(config);
+      if (!support.supported) {
+        return {
+          ok: false,
+          ms: 0,
+          note: `isConfigSupported=false`,
+        };
+      }
+
+      let outputCount = 0;
+      const decoder = new VideoDecoder({
+        output: (frame) => {
+          outputCount++;
+          frame.close();
+        },
+        error: (e) => {
+          log(`[${c.id}] decoder error: ${e.message}`, 'err');
+        },
+      });
+      decoder.configure(config);
+
+      const t0 = performance.now();
+      try {
+        if (c.pattern === 'stream') {
+          startHeartbeat(`${c.id} stream→flush`);
+          for (const batch of gopChunks) {
+            for (const chunk of batch) decoder.decode(chunk);
+          }
+          await flushWithTimeout(decoder, timeoutMs, `${c.id} flush`);
+        } else {
+          for (let i = 0; i < gopChunks.length; i++) {
+            if (aborted) throw new Error('用户中止');
+            startHeartbeat(`${c.id} flush#${i + 1}/${gopChunks.length}`);
+            for (const chunk of gopChunks[i]) decoder.decode(chunk);
+            await flushWithTimeout(decoder, timeoutMs, `${c.id} flush#${i + 1}`);
+          }
+        }
+        const ms = performance.now() - t0;
+        safeClose(decoder);
+        return { ok: true, ms, note: `output=${outputCount}` };
+      } catch (e) {
+        const ms = performance.now() - t0;
+        safeClose(decoder);
+        return { ok: false, ms, note: e.message };
+      } finally {
+        stopHeartbeat();
+      }
+    }
+
+    abortBtn.addEventListener('click', () => {
+      aborted = true;
+      log('已请求中止（当前 flush 仍可能等到超时）', 'err');
+    });
+
+    runBtn.addEventListener('click', async () => {
+      if (!videoMeta || !gopChunks.length) return;
+      aborted = false;
+      runBtn.disabled = true;
+      abortBtn.disabled = false;
+      const timeoutMs = Number(timeoutEl.value) || 3000;
+      log(
+        `开始矩阵，flush 超时=${timeoutMs}ms，平台=${navigator.platform}`,
+        'info',
+      );
+      log(`UA: ${navigator.userAgent}`, 'info');
+
+      const results = [];
+      for (const c of FLUSH_CASES) {
+        if (aborted) {
+          setRow(c.id, 'SKIP', null, '中止');
+          continue;
+        }
+        setRow(c.id, 'RUN', null, '…');
+        log(`→ ${c.id} ${c.mode}`);
+        await paint();
+        const r = await runCase(c, timeoutMs);
+        results.push({ id: c.id, ...r });
+        setRow(c.id, r.ok ? 'PASS' : 'FAIL', r.ms, r.note);
+        log(`${c.id} ${r.ok ? 'PASS' : 'FAIL'} ${r.ms.toFixed(0)}ms ${r.note}`, r.ok ? 'ok' : 'err');
+        // 给浏览器一点时间回收硬解会话
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      const get = (id) => results.find((x) => x.id === id);
+      const A = get('A-demo-stream');
+      const B = get('B-prod-default');
+      const C = get('C-prod-soft');
+      const D = get('D-prod-no-latency');
+      const E = get('E-stream-latency');
+      const F = get('F-prod-hw');
+
+      log('—— 自动解读 ——', 'info');
+      if (C?.ok && A?.ok && !B?.ok) {
+        log('结论倾向 H1：生产式频繁 flush + 默认/硬解会挂；prefer-software 可规避。demo 流式没事。', 'ok');
+      } else if (C?.ok && A?.ok && B?.ok && !F?.ok) {
+        log('结论倾向 H3：仅显式 prefer-hardware 有问题。', 'ok');
+      } else if (C?.ok && A?.ok && !B?.ok && D?.ok) {
+        log('结论倾向 H2：optimizeForLatency 触发问题路径。', 'ok');
+      } else if (C?.ok && A?.ok && E?.ok && !B?.ok) {
+        log('结论倾向 H1 强化：latency 本身无害，频繁 flush 才是触发器。', 'ok');
+      } else if (!C?.ok) {
+        log('连 prefer-software 都失败：请检查编码/Chrome/是否走了 Vite COEP。看控制台报错。', 'err');
+      } else if (!A?.ok && C?.ok) {
+        log('软解 OK、demo 流式 FAIL：更像默认硬解在单次 flush 也挂。生产必须 prefer-software。', 'ok');
+      } else {
+        log('结果不符合预设模式，请把表格 + 日志发回。', 'info');
+      }
+
+      setHeartbeat('');
+      runBtn.disabled = false;
+      abortBtn.disabled = true;
+    });
+
+    renderRows();
+    log('请选择与生产相同的视频。先应看到第 1 行（prefer-software）较快 PASS。');
+  </script>
+</body>
+</html>
